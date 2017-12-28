@@ -1,32 +1,40 @@
 /*
-  Randomized SVD implementation with Eigen, based on fast.ai Numerical Linear Algebra course
+  Randomized SVD implementation with Eigen
+
+  Based on:
+  * fast.ai Numerical Linear Algebra course
+
 */
 
-#include "Eigen/Dense"
 #include <chrono>
 #include <iostream>
+#include <cmath>
+#include "Eigen/Dense"
+#include "utils.h"
 
 using std::cout;
 using std::endl;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using Eigen::MatrixBase;
 
-Eigen::IOFormat CleanFmt(3, 0, ", ", "\n", "", "");
+// TODO
+// * understand:
+//     * build intuition for U and V matrices
+//     * write down how to do inverse
+//     * difference between pca and svd
+//     * read papers, figure out what power iterations are for
+// * check for edge cases (matrix dimensions vs rank, oversamples)
 
-void print_eigen(const std::string name, const Eigen::MatrixXd& mat) {
-  if (mat.cols() == 1) {
-    std::cout << name << ": " << mat.transpose().format(CleanFmt) << std::endl;
-  } else {
-    std::cout << name << ":\n" << mat.format(CleanFmt) << std::endl;
-  }
-}
+// * speed up - parallelize with Eigen's parallel LU, manually parallelize
+// QR?
+// * Use Eigen::Ref to make more general? But this need to be float or double anyways, and Matrixf or Matrixd can be cast to MatrixXd? What about static matrices?
 
-// TODO speed up - parallelize with Eigen's parallel LU, parallelize QR?
+// interface is same as Eigen SVD
 class RandomizedSvd {
-
-public:
-  RandomizedSvd(const MatrixXd& m, int rank, int oversamples=2, int iter=3)
-    : U_(), V_(), S_() {
+ public:
+  RandomizedSvd(const MatrixXd& m, int rank, int oversamples = 10, int iter = 2)
+      : U_(), V_(), S_() {
     ComputeRandomizedSvd(m, rank, oversamples, iter);
   }
 
@@ -34,80 +42,137 @@ public:
   MatrixXd matrixU() { return U_; }
   MatrixXd matrixV() { return V_; }
 
-  void compute(const MatrixXd& m);
-
-private:
+ private:
   MatrixXd U_, V_;
   VectorXd S_;
 
-  void ComputeRandomizedSvd(const MatrixXd& A, int rank, int oversamples, int iter) {
-    // Find orthonormal vectors that approximates range of A
-    MatrixXd Q = FindRandomizedRange(A, rank+oversamples, iter);
-    MatrixXd B = Q.transpose()*A;
+  void ComputeRandomizedSvd(const MatrixXd& A, int rank, int oversamples,
+                            int iter) {
 
-    // Compute the SVD on the thin matrix
+    using namespace std::chrono;
+    auto start = steady_clock::now();
+
+    // TODO account for skinny and fat A matrix: check dimensions
+
+    // Add some additional samples for accuracy
+    MatrixXd Q = FindRandomizedRange(A, rank + oversamples, iter);
+    auto now = steady_clock::now();
+    long int elapsed = duration_cast<milliseconds>(now - start).count();
+    MatrixXd B = Q.transpose() * A;
+
+    // Compute the SVD on the thin matrix (much cheaper than SVD on original)
+    start = steady_clock::now();
     Eigen::JacobiSVD<MatrixXd> svd(B, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    now = steady_clock::now();
+    elapsed = duration_cast<milliseconds>(now - start).count();
+
     U_ = (Q * svd.matrixU()).block(0, 0, A.rows(), rank);
     V_ = svd.matrixV().transpose().block(0, 0, rank, A.cols());
     S_ = svd.singularValues().head(rank);
   }
 
+  /*
+    Finds a set of orthonormal vectors that approximates the range of A
+    Basic idea is that finding orthonormal basis vectors for AW, where w is some
+    random vectors, can approximate the range of A
+    Most of the time/computation in the randomized SVD is spent here
+  */
   MatrixXd FindRandomizedRange(const MatrixXd& A, int size, int iter) {
     int nr = A.rows(), nc = A.cols();
-    MatrixXd Q = MatrixXd::Random(nc, size);
     MatrixXd L(nr, size);
     Eigen::FullPivLU<MatrixXd> lu1(nr, size);
+    MatrixXd Q = MatrixXd::Random(nc, size); // TODO should this be stack or dynamic allocation?
     Eigen::FullPivLU<MatrixXd> lu2(nc, nr);
 
-    for(int i=0; i<iter; ++i) {
-      lu1.compute(A*Q);
+    // Conduct normalized power iterations
+    // From Facebook implementation: "Please note that even n_iter=1 guarantees superb accuracy, whether or not there is any gap in the singular values of the matrix A being approximated"
+    for (int i = 0; i < iter; ++i) {
+      lu1.compute(A * Q);
       L.setIdentity();
-      L.block(0,0, nr, size).triangularView<Eigen::StrictlyLower>() = lu1.matrixLU();
+      L.block(0, 0, nr, size).triangularView<Eigen::StrictlyLower>() =
+          lu1.matrixLU();
 
-      lu2.compute(A.transpose()*L);
+      lu2.compute(A.transpose() * L);
       Q.setIdentity();
-      Q.block(0,0, nc, size).triangularView<Eigen::StrictlyLower>() = lu2.matrixLU();
+      Q.block(0, 0, nc, size).triangularView<Eigen::StrictlyLower>() =
+          lu2.matrixLU();
     }
 
-    Eigen::ColPivHouseholderQR<MatrixXd> qr(A*Q);
-    return qr.householderQ();
+    Eigen::ColPivHouseholderQR<MatrixXd> qr(A * Q);
+    return qr.householderQ() * MatrixXd::Identity(nr, size); // recover skinny Q matrix
   }
-
 };
 
 /*
-# computes an orthonormal matrix whose range approximates the range of A
-# power_iteration_normalizer can be safe_sparse_dot (fast but unstable), LU (imbetween), or QR (slow but most accurate)
-def randomized_range_finder(A, size, n_iter=5):
-    Q = np.random.normal(size=(A.shape[1], size))
-#     print('init:', Q.shape)
+  Computes spectral norm of error in reconstruction, from SVD matrices.
 
-    for i in range(n_iter):
-        Q, _ = linalg.lu(A @ Q, permute_l=True)
-        #print('1:', Q.shape)
-        Q, _ = linalg.lu(A.T @ Q, permute_l=True) # Q is U! Figure out what linalg.lu returns
-        #print('2:', Q.shape)
-        #print(orthonormal_check(Q))
-        # Note: for LU of non-square matrices, matrix on side of smaller dim will be square
-
-    Q, _ = linalg.qr(A @ Q, mode='economic')
-    return Q
-
-def randomized_svd(M, n_components, n_oversamples=10, n_iter=3):
-
-    # Oversamples are for a bit more accuracy
-    n_random = n_components + n_oversamples
-
-    Q = randomized_range_finder(M, n_random, n_iter)
-
-    # project M to the (k + p) dimensional space using the basis vectors
-    B = Q.T @ M
-
-    # compute the SVD on the thin matrix: (k + p) wide
-    Uhat, s, V = linalg.svd(B, full_matrices=False)
-    del B #What is this for?
-    U = Q @ Uhat
-
-    return U[:, :n_components], s[:n_components], V[:n_components, :]
-
+  Spectral norm = square root of maximum eigenvalue of matrix. Intuitively: the maximum 'scale', by which a matrix can 'stretch' a vector.
+  Note: The definition of an eigenvalue is for square matrices. For non square matrices, we can define singular values: Definition: The singular values of a m×n matrix A are the positive square roots of the nonzero eigenvalues of the corresponding matrix A'A. The corresponding eigenvectors are called the singular vectors.
 */
+double diff_spectral_norm(MatrixXd& A, MatrixXd& U, VectorXd& s, MatrixXd& V, int n_iter=20) {
+  int nr = A.rows(), nc = A.cols(), snorm;
+
+  VectorXd y = VectorXd::Random(nr);
+  y.normalize();
+  MatrixXd S = s.asDiagonal(); // TODO use diagonal-ness to speed up computation?
+  // TODO pre-calculate S.inverse()?
+  VectorXd x(nr);
+
+  // TODO implement and compare fbpca's method
+  // TODO figure out ways to make this more efficient (memory, compute)
+  // Run n iterations of the power method
+  MatrixXd B = (A - U*S*V);
+
+  if(B.rows() != B.cols())
+     B = B*B.transpose();
+
+  for(int i=0; i<n_iter; ++i) {
+    y = B*y;
+    y.normalize();
+  }
+  double eigval = abs((B*y).dot(y) / y.dot(y));
+
+  return sqrt(eigval);
+}
+
+// Test for finding diff_spectral_norm
+double find_largest_eigenvalue(MatrixXd& A) {
+  int n_iter = 20;
+
+  VectorXd y = VectorXd::Random(A.rows());
+
+  // Method for non-square matrices
+  // double snorm;
+  // TODO understand and fix this
+  // for(int i=0; i<n_iter; ++i){
+  //   VectorXd x = A.transpose()*y;
+  //   y = A*x;
+  //   snorm = y.norm();
+  //   y.normalize();
+  // }
+  //
+  // cout << "Normalized eigenvector: " << y.transpose() << endl;
+  // double eigval = sqrt(snorm);
+
+  // Simple method for square matrices - extended for nonsquare
+  double eigval;
+  if(A.rows() == A.cols()) {
+    for(int i=0; i<n_iter; ++i) {
+      y = A*y;
+      y.normalize();
+    }
+    eigval = (A*y).dot(y) / y.dot(y);
+  }
+  else {
+    for(int i=0; i<n_iter; ++i) {
+      y = A*A.transpose()*y;
+      y.normalize();
+    }
+    eigval = (A*A.transpose()*y).dot(y) / y.dot(y);
+  }
+  // eigval = (eigval >= 0) ? eigval : -eigval;
+
+  cout << "Normalized eigenvector: " << y.transpose() << endl;
+
+  return eigval;
+}
