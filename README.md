@@ -1,4 +1,11 @@
-Implementation of Fast Randomized SVD [1] with C++/Eigen. 
+Implementation of Fast Randomized SVD [1] for low-rank approximation of matrices. C++/Eigen, interface is same as Eigen's jacobiSVD.
+
+Also a demo of background removal in webcam feed using randomized SVD.
+
+### Requirements
+
+* Eigen (currently assumed to be in _eigen_ folder in root)
+* OpenCV (for background removal demo)
 
 ### References
 
