@@ -10,6 +10,7 @@
    * look at/test other methods for background subtraction
      * mean/median/mode, thresholding
      * low-pass filter (smooth out small variations in lighting)
+     * robust PCA
      * https://docs.opencv.org/3.1.0/d1/dc5/tutorial_background_subtraction.html
 */
 
@@ -89,24 +90,27 @@ int main() {
     MatrixXd V = rsvd.matrixV();
     VectorXd s = rsvd.singularValues();
     MatrixXd S = s.asDiagonal();
-    MatrixUd low_rank = (U * S * V).cast<unsigned char>();
+    MatrixUd low_rank = (U * S * V.transpose()).cast<unsigned char>();
 
     // Remove background from all images in frame buffer, take current frame
     VectorUd bg_removed = (frame_buf - low_rank).row(buf_idx);
+    VectorUd bg = low_rank.row(buf_idx);
 
     // Reconstruct opencv mat with "foreground" image
-    cv::Mat new_frame(eigen_frame.rows(), eigen_frame.cols(), CV_8U, bg_removed.data());
+    cv::Mat bg_removed_mat(eigen_frame.rows(), eigen_frame.cols(), CV_8U, bg_removed.data());
+    cv::Mat bg_mat(eigen_frame.rows(), eigen_frame.cols(), CV_8U, bg.data());
 
     // cout << (int)bg_removed.minCoeff() << ", " << (int)bg_removed.maxCoeff() << endl;
     // double min, max;
     // cv::minMaxLoc(new_frame, &min, &max);
     // cout << min << ", " << max << endl;
 
-    // show current frame and "foreground" image side-by-side
-    cv::Mat sidebyside(cv::Size(frame.cols*2, frame.rows), frame.type(), cv::Scalar::all(0));
+    // show current frame, background, and "foreground" image side-by-side
+    cv::Mat sidebyside(cv::Size(frame.cols*3, frame.rows), frame.type(), cv::Scalar::all(0));
     frame.copyTo(sidebyside(cv::Rect(0, 0, n_cols, n_rows)));
-    new_frame.copyTo(sidebyside(cv::Rect(n_cols, 0, n_cols, n_rows)));
-    cv::imshow("cam", sidebyside);
+    bg_mat.copyTo(sidebyside(cv::Rect(n_cols, 0, n_cols, n_rows)));
+    bg_removed_mat.copyTo(sidebyside(cv::Rect(n_cols*2, 0, n_cols, n_rows)));
+    cv::imshow("frame, background, foreground", sidebyside);
 
     buf_idx = (buf_idx+1) % sliding_window;
     if (cv::waitKey(1) >= 0) break;
