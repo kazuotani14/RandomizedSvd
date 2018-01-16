@@ -8,7 +8,8 @@ using namespace std::chrono;
 
   Empirically, I found that increasing the rank of the randomized SVD doesn't decrease the reconstruction error enough to make it worth the increase computation. You can check that the algorithm works by setting rank_rsvd=rank(M)
 */
-int main() {
+int main(int argc, char* argv[]) {
+  cout << "Making large (1000x500) random matrix" << endl;
   Eigen::MatrixXd M = Eigen::MatrixXd(1000, 500);
   srand((unsigned int) time(0));
   M.setRandom();

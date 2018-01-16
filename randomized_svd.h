@@ -4,11 +4,14 @@
 
   TODO
   * account for skinny and fat matrices
-  * check for edge cases (matrix dimensions vs rank, oversamples)
   * speed up: parallelize with Eigen's parallel LU, manually parallelize QR?
   * Use Eigen::Ref to make more general? But this need to be float or double anyways, and Matrixf or Matrixd can be cast to MatrixXd? What about static matrices?
 */
 
+#ifndef _RANDOMIZEDSVD_H_
+#define _RANDOMIZEDSVD_H_
+
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <cmath>
@@ -17,13 +20,14 @@
 
 using std::cout;
 using std::endl;
+using std::min;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using Eigen::MatrixBase;
 
 
 class RandomizedSvd {
- public:
+public:
   RandomizedSvd(const MatrixXd& m, int rank, int oversamples = 10, int iter = 2)
       : U_(), V_(), S_() {
     ComputeRandomizedSvd(m, rank, oversamples, iter);
@@ -33,17 +37,23 @@ class RandomizedSvd {
   MatrixXd matrixU() { return U_; }
   MatrixXd matrixV() { return V_; }
 
- private:
+private:
   MatrixXd U_, V_;
   VectorXd S_;
 
   /*
     Main function for randomized svd
-    oversamples: additional samples/rank for accuracy
+    oversamples: additional samples/rank for accuracy, to account for random sampling
   */
   void ComputeRandomizedSvd(const MatrixXd& A, int rank, int oversamples,
                             int iter) {
     using namespace std::chrono;
+
+    // If matrix is too small for desired rank/oversamples
+    if((rank + oversamples) > min(A.rows(), A.cols())) {
+      rank = min(A.rows(), A.cols());
+      oversamples = 0;
+    }
 
     MatrixXd Q = FindRandomizedRange(A, rank + oversamples, iter);
     MatrixXd B = Q.transpose() * A;
@@ -70,6 +80,8 @@ class RandomizedSvd {
     Eigen::FullPivLU<MatrixXd> lu2(nc, nr);
 
     // Conduct normalized power iterations
+    // Intuition: multiply by A a few times to find a matrix Q that's "more in the range of A"
+    //  Simply multiplying by A repeatedly makes alg unstable, so use LU to "normalize"
     // From Facebook implementation: "Please note that even n_iter=1 guarantees superb accuracy, whether or not there is any gap in the singular values of the matrix A being approximated"
     for (int i = 0; i < iter; ++i) {
       lu1.compute(A * Q);
@@ -117,3 +129,5 @@ double diff_spectral_norm(MatrixXd A, MatrixXd U, VectorXd s, MatrixXd V, int n_
 
   return sqrt(eigval);
 }
+
+#endif

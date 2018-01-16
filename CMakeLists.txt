@@ -12,6 +12,7 @@ include_directories("eigen")
 # target_link_libraries (example Eigen3::Eigen)
 
 add_executable(TryRandomizedSvd try_randomized_svd.cpp)
+add_executable(TryRobustPca try_robust_pca.cpp)
 
 add_executable(BackgroundRemoval background_removal.cpp)
 target_link_libraries(BackgroundRemoval ${OpenCV_LIBS})
